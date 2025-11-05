@@ -25,7 +25,7 @@ jobs:
         
     - name: Gerekli kütüphaneleri yükle
       run: |
-        pip install selenium
+        pip3 install selenium
         
     - name: YouTube M3U scriptini çalıştır
       run: python youtube_m3u_generator.py
