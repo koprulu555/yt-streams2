@@ -3,9 +3,9 @@
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.common.by import By
 import re
 import time
 import os
@@ -49,16 +49,33 @@ def links_dosyasini_oku():
 def setup_selenium():
     """Selenium driver'ını kur"""
     chrome_options = Options()
-    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--headless=new')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
     
-    # Chrome'u başlat
-    driver = webdriver.Chrome(options=chrome_options)
-    return driver
+    # ChromeDriver'ı bul
+    chrome_driver_path = "/usr/local/bin/chromedriver"  # GitHub Actions'taki varsayılan yol
+    
+    try:
+        service = Service(chrome_driver_path)
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        return driver
+    except Exception as e:
+        print(f"❌ ChromeDriver hatası: {e}")
+        # Fallback: System PATH'ten ChromeDriver'ı dene
+        try:
+            driver = webdriver.Chrome(options=chrome_options)
+            return driver
+        except Exception as e2:
+            print(f"❌ Fallback ChromeDriver da başarısız: {e2}")
+            return None
 
 def get_hls_url_selenium(driver, youtube_url):
     """Selenium ile HLS URL'sini al"""
@@ -66,37 +83,42 @@ def get_hls_url_selenium(driver, youtube_url):
         print(f"   🌐 Sayfa açılıyor: {youtube_url}")
         driver.get(youtube_url)
         
-        # Sayfanın yüklenmesini bekle (30 saniye)
-        WebDriverWait(driver, 30).until(
-            lambda driver: driver.execute_script("return document.readyState") == "complete"
-        )
+        # Sayfanın tamamen yüklenmesini bekle (daha uzun süre)
+        time.sleep(10)
         
         # Sayfa kaynağını al
         page_source = driver.page_source
         
-        # HLS URL'sini regex ile ara
+        # Debug: Sayfa kaynağını kaydet (sadece ilk 5000 karakter)
+        with open('debug_page.html', 'w', encoding='utf-8') as f:
+            f.write(page_source[:5000])
+        print("   📄 Sayfa kaynağı debug_page.html'ye kaydedildi")
+        
+        # Gelişmiş HLS URL arama pattern'leri
         patterns = [
             r'"hlsManifestUrl":"(https:[^"]+m3u8[^"]*)"',
             r'"hlsManifestUrl":"(https:[^"]+)"',
             r'hlsManifestUrl["\']?\s*:\s*["\'](https:[^"\']+m3u8[^"\']*)["\']',
             r'"url":"(https:[^"]+m3u8[^"]*)"',
+            r'\\"hlsManifestUrl\\":\\"(https:[^"]+m3u8[^"]*)\\"',
+            r'hlsManifestUrl["\']?\s*:\s*["\'](https:[^"\']+)["\']',
+            r'"liveUrl":"(https:[^"]+m3u8[^"]*)"',
+            r'"playbackUrl":"(https:[^"]+m3u8[^"]*)"',
         ]
         
         for pattern in patterns:
             matches = re.findall(pattern, page_source)
             if matches:
                 for match in matches:
+                    # URL'yi temizle
                     hls_url = match.replace('\\u0026', '&').replace('\\/', '/').replace('\\\\u0026', '&')
-                    if 'm3u8' in hls_url and 'googlevideo.com' in hls_url:
-                        print(f"   ✅ HLS URL bulundu")
+                    if 'm3u8' in hls_url:
+                        print(f"   ✅ HLS URL bulundu: {hls_url[:100]}...")
                         return hls_url
         
         print("   ❌ HLS URL bulunamadı")
         return None
         
-    except TimeoutException:
-        print("   ❌ Sayfa zaman aşımına uğradı")
-        return None
     except Exception as e:
         print(f"   ❌ Selenium hatası: {str(e)}")
         return None
@@ -123,7 +145,7 @@ def m3u_dosyasi_olustur(kanallar):
 
 def main():
     print("=" * 60)
-    print("🚀 YOUTUBE M3U GENERATOR (SELENIUM) - BAŞLIYOR")
+    print("🚀 YOUTUBE M3U GENERATOR (SELENIUM FIXED) - BAŞLIYOR")
     print("=" * 60)
     
     # 1. links.txt dosyasını oku
@@ -135,6 +157,10 @@ def main():
     # 2. Selenium driver'ını başlat
     print("🖥️ Selenium driver başlatılıyor...")
     driver = setup_selenium()
+    
+    if not driver:
+        print("❌ Selenium driver başlatılamadı!")
+        return
     
     try:
         # 3. Her kanal için HLS URL'sini al
@@ -174,8 +200,9 @@ def main():
 
     finally:
         # Driver'ı kapat
-        driver.quit()
-        print("🖥️ Selenium driver kapatıldı")
+        if driver:
+            driver.quit()
+            print("🖥️ Selenium driver kapatıldı")
 
 if __name__ == "__main__":
     main()
