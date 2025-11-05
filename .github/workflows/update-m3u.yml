@@ -2,7 +2,7 @@ name: Update YouTube M3U
 
 on:
   schedule:
-    - cron: '0 */2 * * *'  # 2 saatte bir
+    - cron: '0 */3 * * *'  # 3 saatte bir
   workflow_dispatch:
 
 jobs:
@@ -18,11 +18,16 @@ jobs:
       with:
         python-version: '3.10'
         
-    - name: yt-dlp kütüphanesini yükle
-      run: |
-        pip install yt-dlp
+    - name: Chrome ve ChromeDriver kur
+      uses: browser-actions/setup-chrome@v1
+      with:
+        chrome-version: stable
         
-    - name: YouTube M3U scriptini çalıştır (YT-DLP)
+    - name: Gerekli kütüphaneleri yükle
+      run: |
+        pip install selenium
+        
+    - name: YouTube M3U scriptini çalıştır
       run: python youtube_m3u_generator.py
       
     - name: Değişiklikleri kaydet ve gönder
@@ -30,5 +35,5 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add youtube.m3u
-        git diff --staged --quiet || git commit -m "YouTube M3U güncellendi (YT-DLP) - $(date +'%Y-%m-%d %H:%M')"
+        git diff --staged --quiet || git commit -m "YouTube M3U güncellendi (Selenium) - $(date +'%Y-%m-%d %H:%M')"
         git push
