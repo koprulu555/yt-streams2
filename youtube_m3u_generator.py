@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import yt_dlp
-import os
 import time
+import os
+import sys
 
 def links_dosyasini_oku():
     """links.txt dosyasını oku ve kanal listesini döndür"""
@@ -48,7 +49,21 @@ def hls_url_al_ytdlp(youtube_url):
         'no_warnings': False,
         'extract_flat': False,
         'live_from_start': True,
-        'format': 'best',  # En iyi kaliteyi otomatik seç
+        'format': 'best',
+        # Cookie dosyası kullan (eğer varsa)
+        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+        # Gelişmiş istemci ayarları
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android_sdkless', 'web_safari'],
+                'formats': ['incomplete', 'duplicate']
+            }
+        },
+        # Ağ ve timeout ayarları
+        'socket_timeout': 30,
+        'extract_retries': 3,
+        'fragment_retries': 3,
+        'retry_sleep': 1,
     }
     
     try:
@@ -56,29 +71,40 @@ def hls_url_al_ytdlp(youtube_url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(youtube_url, download=False)
             
-            # HLS URL'sini bul
-            if 'url' in info:
-                print(f"   ✅ Doğrudan URL bulundu")
+            # Debug bilgisi
+            print(f"   📺 Video başlığı: {info.get('title', 'Bilinmiyor')}")
+            print(f"   🔴 Canlı mı: {info.get('is_live', 'Bilinmiyor')}")
+            
+            # Önce doğrudan URL'yi kontrol et
+            if 'url' in info and 'm3u8' in info['url']:
+                print(f"   ✅ Doğrudan HLS URL bulundu")
                 return info['url']
             
-            # Formatlar içinde m3u8 ara
+            # Formats içinde m3u8 ara
             if 'formats' in info:
                 for f in info['formats']:
-                    if f.get('protocol', '').startswith('m3u8'):
-                        print(f"   ✅ M3U8 formatı bulundu")
-                        return f['url']
+                    format_url = f.get('url', '')
+                    if 'm3u8' in format_url:
+                        print(f"   ✅ Format içinde HLS URL bulundu")
+                        return format_url
             
-            # DVR/Canlı yayın URL'si
+            # Live manifest URL'sini ara
+            if 'hls_manifest_url' in info:
+                print("   ✅ HLS manifest URL bulundu")
+                return info['hls_manifest_url']
+                
+            # Requested formats içinde ara
             if 'requested_formats' in info:
                 for f in info['requested_formats']:
                     if 'm3u8' in f.get('url', ''):
+                        print("   ✅ Requested formats içinde HLS URL bulundu")
                         return f['url']
             
-            print(f"   ❌ HLS URL bulunamadı")
+            print("   ❌ Hiçbir HLS URL bulunamadı")
             return None
             
     except Exception as e:
-        print(f"   ❌ yt-dlp hatası: {str(e)[:100]}")
+        print(f"   ❌ yt-dlp hatası: {str(e)}")
         return None
 
 def m3u_dosyasi_olustur(kanallar):
@@ -103,8 +129,14 @@ def m3u_dosyasi_olustur(kanallar):
 
 def main():
     print("=" * 60)
-    print("🚀 YOUTUBE M3U GENERATOR (PROXY'SIZ) - BAŞLIYOR")
+    print("🚀 YOUTUBE M3U GENERATOR (YT-DLP) - BAŞLIYOR")
     print("=" * 60)
+    
+    # Cookie kontrolü
+    if os.path.exists('cookies.txt'):
+        print("🍪 Cookie dosyası bulundu")
+    else:
+        print("ℹ️ Cookie dosyası bulunamadı, anonim erişim deneniyor...")
     
     # 1. links.txt dosyasını oku
     kanallar = links_dosyasini_oku()
@@ -114,7 +146,7 @@ def main():
     
     # 2. Her kanal için HLS URL'sini al (PROXY'SIZ)
     print("\n" + "=" * 60)
-    print("📡 HLS URL'LERİ ALINIYOR (PROXY YOK)...")
+    print("📡 HLS URL'LERİ ALINIYOR (YT-DLP)...")
     print("=" * 60)
     
     for kanal in kanallar:
@@ -126,12 +158,12 @@ def main():
         
         if hls_url:
             kanal['hls_url'] = hls_url
-            print(f"   ✅ BAŞARILI - HLS URL: {hls_url[:80]}...")
+            print(f"   ✅ BAŞARILI - HLS URL alındı")
         else:
             print(f"   ❌ BAŞARISIZ - HLS URL alınamadı")
         
         # YouTube rate limit için küçük bekleme
-        time.sleep(2)
+        time.sleep(3)
     
     # 3. M3U dosyasını oluştur
     print("\n" + "=" * 60)
