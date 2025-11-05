@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import yt_dlp
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+import re
 import time
 import os
-import sys
 
 def links_dosyasini_oku():
     """links.txt dosyasını oku ve kanal listesini döndür"""
@@ -42,69 +46,59 @@ def links_dosyasini_oku():
     print(f"📊 {len(kanallar)} kanal bulundu")
     return kanallar
 
-def hls_url_al_ytdlp(youtube_url):
-    """yt-dlp ile doğrudan HLS URL'sini al (PROXY YOK)"""
-    ydl_opts = {
-        'quiet': False,
-        'no_warnings': False,
-        'extract_flat': False,
-        'live_from_start': True,
-        'format': 'best',
-        # Cookie dosyası kullan (eğer varsa)
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
-        # Gelişmiş istemci ayarları
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android_sdkless', 'web_safari'],
-                'formats': ['incomplete', 'duplicate']
-            }
-        },
-        # Ağ ve timeout ayarları
-        'socket_timeout': 30,
-        'extract_retries': 3,
-        'fragment_retries': 3,
-        'retry_sleep': 1,
-    }
+def setup_selenium():
+    """Selenium driver'ını kur"""
+    chrome_options = Options()
+    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
+    # Chrome'u başlat
+    driver = webdriver.Chrome(options=chrome_options)
+    return driver
+
+def get_hls_url_selenium(driver, youtube_url):
+    """Selenium ile HLS URL'sini al"""
     try:
-        print(f"   🔍 yt-dlp ile HLS URL alınıyor...")
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=False)
-            
-            # Debug bilgisi
-            print(f"   📺 Video başlığı: {info.get('title', 'Bilinmiyor')}")
-            print(f"   🔴 Canlı mı: {info.get('is_live', 'Bilinmiyor')}")
-            
-            # Önce doğrudan URL'yi kontrol et
-            if 'url' in info and 'm3u8' in info['url']:
-                print(f"   ✅ Doğrudan HLS URL bulundu")
-                return info['url']
-            
-            # Formats içinde m3u8 ara
-            if 'formats' in info:
-                for f in info['formats']:
-                    format_url = f.get('url', '')
-                    if 'm3u8' in format_url:
-                        print(f"   ✅ Format içinde HLS URL bulundu")
-                        return format_url
-            
-            # Live manifest URL'sini ara
-            if 'hls_manifest_url' in info:
-                print("   ✅ HLS manifest URL bulundu")
-                return info['hls_manifest_url']
-                
-            # Requested formats içinde ara
-            if 'requested_formats' in info:
-                for f in info['requested_formats']:
-                    if 'm3u8' in f.get('url', ''):
-                        print("   ✅ Requested formats içinde HLS URL bulundu")
-                        return f['url']
-            
-            print("   ❌ Hiçbir HLS URL bulunamadı")
-            return None
-            
+        print(f"   🌐 Sayfa açılıyor: {youtube_url}")
+        driver.get(youtube_url)
+        
+        # Sayfanın yüklenmesini bekle (30 saniye)
+        WebDriverWait(driver, 30).until(
+            lambda driver: driver.execute_script("return document.readyState") == "complete"
+        )
+        
+        # Sayfa kaynağını al
+        page_source = driver.page_source
+        
+        # HLS URL'sini regex ile ara
+        patterns = [
+            r'"hlsManifestUrl":"(https:[^"]+m3u8[^"]*)"',
+            r'"hlsManifestUrl":"(https:[^"]+)"',
+            r'hlsManifestUrl["\']?\s*:\s*["\'](https:[^"\']+m3u8[^"\']*)["\']',
+            r'"url":"(https:[^"]+m3u8[^"]*)"',
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, page_source)
+            if matches:
+                for match in matches:
+                    hls_url = match.replace('\\u0026', '&').replace('\\/', '/').replace('\\\\u0026', '&')
+                    if 'm3u8' in hls_url and 'googlevideo.com' in hls_url:
+                        print(f"   ✅ HLS URL bulundu")
+                        return hls_url
+        
+        print("   ❌ HLS URL bulunamadı")
+        return None
+        
+    except TimeoutException:
+        print("   ❌ Sayfa zaman aşımına uğradı")
+        return None
     except Exception as e:
-        print(f"   ❌ yt-dlp hatası: {str(e)}")
+        print(f"   ❌ Selenium hatası: {str(e)}")
         return None
 
 def m3u_dosyasi_olustur(kanallar):
@@ -129,14 +123,8 @@ def m3u_dosyasi_olustur(kanallar):
 
 def main():
     print("=" * 60)
-    print("🚀 YOUTUBE M3U GENERATOR (YT-DLP) - BAŞLIYOR")
+    print("🚀 YOUTUBE M3U GENERATOR (SELENIUM) - BAŞLIYOR")
     print("=" * 60)
-    
-    # Cookie kontrolü
-    if os.path.exists('cookies.txt'):
-        print("🍪 Cookie dosyası bulundu")
-    else:
-        print("ℹ️ Cookie dosyası bulunamadı, anonim erişim deneniyor...")
     
     # 1. links.txt dosyasını oku
     kanallar = links_dosyasini_oku()
@@ -144,41 +132,50 @@ def main():
         print("❌ İşlem iptal edildi: Kanallar bulunamadı")
         return
     
-    # 2. Her kanal için HLS URL'sini al (PROXY'SIZ)
-    print("\n" + "=" * 60)
-    print("📡 HLS URL'LERİ ALINIYOR (YT-DLP)...")
-    print("=" * 60)
+    # 2. Selenium driver'ını başlat
+    print("🖥️ Selenium driver başlatılıyor...")
+    driver = setup_selenium()
     
-    for kanal in kanallar:
-        print(f"\n🎬 KANAL: {kanal['isim']}")
-        print(f"   🔗 URL: {kanal['icerik']}")
+    try:
+        # 3. Her kanal için HLS URL'sini al
+        print("\n" + "=" * 60)
+        print("📡 HLS URL'LERİ ALINIYOR (SELENIUM)...")
+        print("=" * 60)
         
-        # yt-dlp ile doğrudan çek (PROXY YOK)
-        hls_url = hls_url_al_ytdlp(kanal['icerik'])
+        for kanal in kanallar:
+            print(f"\n🎬 KANAL: {kanal['isim']}")
+            print(f"   🔗 URL: {kanal['icerik']}")
+            
+            hls_url = get_hls_url_selenium(driver, kanal['icerik'])
+            
+            if hls_url:
+                kanal['hls_url'] = hls_url
+                print(f"   ✅ BAŞARILI - HLS URL alındı")
+            else:
+                print(f"   ❌ BAŞARISIZ - HLS URL alınamadı")
+            
+            # Bekleme
+            time.sleep(5)
         
-        if hls_url:
-            kanal['hls_url'] = hls_url
-            print(f"   ✅ BAŞARILI - HLS URL alındı")
-        else:
-            print(f"   ❌ BAŞARISIZ - HLS URL alınamadı")
+        # 4. M3U dosyasını oluştur
+        print("\n" + "=" * 60)
+        print("📝 M3U DOSYASI OLUŞTURULUYOR...")
+        print("=" * 60)
         
-        # YouTube rate limit için küçük bekleme
-        time.sleep(3)
-    
-    # 3. M3U dosyasını oluştur
-    print("\n" + "=" * 60)
-    print("📝 M3U DOSYASI OLUŞTURULUYOR...")
-    print("=" * 60)
-    
-    basarili_sayisi = m3u_dosyasi_olustur(kanallar)
-    
-    # 4. Sonuçları göster
-    print("\n" + "=" * 60)
-    print("🎉 SONUÇLAR")
-    print("=" * 60)
-    print(f"📊 Toplam Kanal: {len(kanallar)}")
-    print(f"✅ Başarılı: {basarili_sayisi}")
-    print(f"❌ Başarısız: {len(kanallar) - basarili_sayisi}")
+        basarili_sayisi = m3u_dosyasi_olustur(kanallar)
+        
+        # 5. Sonuçları göster
+        print("\n" + "=" * 60)
+        print("🎉 SONUÇLAR")
+        print("=" * 60)
+        print(f"📊 Toplam Kanal: {len(kanallar)}")
+        print(f"✅ Başarılı: {basarili_sayisi}")
+        print(f"❌ Başarısız: {len(kanallar) - basarili_sayisi}")
+
+    finally:
+        # Driver'ı kapat
+        driver.quit()
+        print("🖥️ Selenium driver kapatıldı")
 
 if __name__ == "__main__":
     main()
