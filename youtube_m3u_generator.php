@@ -1,7 +1,7 @@
 <?php
 /**
- * YouTube M3U Generator - Advanced PHP Solution
- * No API, No Proxy, No Cookies - Smart Techniques Only
+ * YouTube M3U Generator - Google Search Referer Method
+ * Google üzerinden YouTube'a erişim
  */
 
 class YouTubeM3UGenerator {
@@ -89,38 +89,14 @@ class YouTubeM3UGenerator {
         return null;
     }
     
-    private function getAdvancedHeaders() {
-        return [
-            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Encoding: gzip, deflate, br',
-            'Accept-Language: tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Cache-Control: no-cache',
-            'Connection: keep-alive',
-            'Host: m.youtube.com',
-            'Referer: https://www.youtube.com/',
-            'Upgrade-Insecure-Requests: 1',
-            'User-Agent: Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.6723.58 Mobile DuckDuckGo/5 Safari/537.36',
-            'X-Browser-Channel: stable',
-            'X-Browser-Copyright: Copyright 2025 Google LLC. All rights reserved.',
-            'X-Browser-Validation: J9DSnQ4ykHeik2fBjbqtH+hIrks=',
-            'X-Browser-Year: 2025',
-            'X-Client-Data: CM6QywE=',
-            'X-YouTube-Client-Name: 2',
-            'X-YouTube-Client-Version: 2.20250523.01.00',
-            'X-YouTube-Device: cbr=Chrome+Mobile+Webview&cbrand=generic&cbrver=130.0.6723.58&ceng=WebKit&cengver=537.36&cmodel=android+14.0&cos=Android&cosver=14&cplatform=TABLET',
-            'X-YouTube-Page-CL: 762288710',
-            'X-YouTube-Page-Label: youtube.mobile.web.client_20250523_01_RC00',
-            'X-YouTube-Time-Zone: Europe/Istanbul',
-            'X-YouTube-Utc-Offset: 180',
-            'Sec-Fetch-Dest: document',
-            'Sec-Fetch-Mode: navigate',
-            'Sec-Fetch-Site: same-origin',
-            'Sec-Fetch-User: ?1'
-        ];
+    private function getGoogleSearchUrl($youtube_url) {
+        // YouTube URL'sini Google'da arayacak URL oluştur
+        $encoded_url = urlencode($youtube_url);
+        return "https://www.google.com/search?q=" . $encoded_url . "&btnI=I'm+Feeling+Lucky";
     }
     
     private function getHLSURL($url, $channel_name) {
-        $this->log("   🌐 Sayfa açılıyor: $url");
+        $this->log("   🌐 Google üzerinden YouTube'a erişiliyor: $url");
         
         // Video ID'sini çıkar
         $videoId = $this->extractVideoId($url);
@@ -131,11 +107,26 @@ class YouTubeM3UGenerator {
         
         $this->log("   🆔 Video ID: $videoId");
         
-        // Mobile YouTube URL'sini oluştur (TABLET parametresi ile)
-        $mobile_url = "https://m.youtube.com/watch?v=" . $videoId . "&app=TABLET";
+        // Mobile YouTube URL'sini oluştur
+        $mobile_url = "https://m.youtube.com/watch?v=" . $videoId;
         
-        // YouTube'dan sayfayı çek
-        $html = $this->fetchYouTubePageAdvanced($mobile_url);
+        // Google arama URL'sini oluştur
+        $google_search_url = $this->getGoogleSearchUrl($mobile_url);
+        $this->log("   🔍 Google arama URL: " . $google_search_url);
+        
+        // Önce Google'dan sayfayı çek (I'm Feeling Lucky ile doğrudan YouTube'a yönlendirme)
+        $final_url = $this->getFinalUrlFromGoogle($google_search_url);
+        
+        if ($final_url) {
+            $this->log("   📍 Google yönlendirmesi: $final_url");
+            
+            // Google referansı ile YouTube'dan sayfayı çek
+            $html = $this->fetchYouTubeViaGoogle($final_url, $google_search_url);
+        } else {
+            // Google yönlendirmesi olmazsa doğrudan YouTube'a git
+            $this->log("   ⚠️ Google yönlendirmesi başarısız, doğrudan erişim denenecek");
+            $html = $this->fetchYouTubeViaGoogle($mobile_url, "https://www.google.com/");
+        }
         
         if (!$html) {
             $this->log("   ❌ Sayfa çekilemedi");
@@ -143,11 +134,11 @@ class YouTubeM3UGenerator {
         }
         
         // Debug için kaydet
-        file_put_contents('debug_page_advanced.html', $html);
-        $this->log("   📄 Sayfa kaynağı debug_page_advanced.html'ye kaydedildi");
+        file_put_contents('debug_page_google.html', $html);
+        $this->log("   📄 Sayfa kaynağı debug_page_google.html'ye kaydedildi");
         
-        // HLS URL'sini ara - Gelişmiş yöntemler
-        $hls_url = $this->extractHLSAdvanced($html);
+        // HLS URL'sini ara
+        $hls_url = $this->extractHLSFromHTML($html);
         
         if ($hls_url) {
             $this->log("   ✅ HLS URL bulundu: " . substr($hls_url, 0, 80) . "...");
@@ -158,21 +149,61 @@ class YouTubeM3UGenerator {
         return null;
     }
     
-    private function fetchYouTubePageAdvanced($url) {
+    private function getFinalUrlFromGoogle($google_url) {
         $ch = curl_init();
         
         curl_setopt_array($ch, [
-            CURLOPT_URL => $url,
+            CURLOPT_URL => $google_url,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_USERAGENT => 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.6723.58 Mobile DuckDuckGo/5 Safari/537.36',
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_HEADER => true,
+            CURLOPT_NOBODY => true
+        ]);
+        
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $redirect_url = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+        curl_close($ch);
+        
+        if ($redirect_url && strpos($redirect_url, 'youtube.com') !== false) {
+            return $redirect_url;
+        }
+        
+        return null;
+    }
+    
+    private function fetchYouTubeViaGoogle($youtube_url, $referer) {
+        $ch = curl_init();
+        
+        $headers = [
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language: tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Cache-Control: no-cache',
+            'Connection: keep-alive',
+            'Referer: ' . $referer,
+            'Upgrade-Insecure-Requests: 1',
+            'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Sec-Fetch-Dest: document',
+            'Sec-Fetch-Mode: navigate',
+            'Sec-Fetch-Site: cross-site'
+        ];
+        
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $youtube_url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
             CURLOPT_TIMEOUT => 30,
             CURLOPT_CONNECTTIMEOUT => 15,
-            CURLOPT_ENCODING => 'gzip, deflate',
-            CURLOPT_HTTPHEADER => $this->getAdvancedHeaders(),
-            CURLOPT_REFERER => 'https://www.youtube.com/',
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_REFERER => $referer
         ]);
         
         $response = curl_exec($ch);
@@ -188,8 +219,8 @@ class YouTubeM3UGenerator {
         return $response;
     }
     
-    private function extractHLSAdvanced($html) {
-        // Backslash'leri temizle (verdiğiniz koddaki yöntem)
+    private function extractHLSFromHTML($html) {
+        // Backslash'leri temizle
         $clean_html = str_replace('\\', '', $html);
         
         // Pattern 1: hlsManifestUrl direkt arama
@@ -200,15 +231,7 @@ class YouTubeM3UGenerator {
             }
         }
         
-        // Pattern 2: URL içinde m3u8 geçen
-        if (preg_match('/"url":"(https:[^"]*?m3u8[^"]*?)"/', $clean_html, $matches)) {
-            $hls_url = $matches[1];
-            if (strpos($hls_url, 'googlevideo.com') !== false) {
-                return $hls_url;
-            }
-        }
-        
-        // Pattern 3: ytInitialPlayerResponse içinde arama
+        // Pattern 2: ytInitialPlayerResponse içinde arama
         if (preg_match('/ytInitialPlayerResponse\s*=\s*({.+?})\s*;/s', $html, $matches)) {
             $json_str = $matches[1];
             $hls_url = $this->extractHLSFromJSON($json_str);
@@ -217,7 +240,7 @@ class YouTubeM3UGenerator {
             }
         }
         
-        // Pattern 4: window["ytInitialPlayerResponse"] içinde arama
+        // Pattern 3: window["ytInitialPlayerResponse"] içinde arama
         if (preg_match('/window\["ytInitialPlayerResponse"\]\s*=\s*({.+?})\s*;/s', $html, $matches)) {
             $json_str = $matches[1];
             $hls_url = $this->extractHLSFromJSON($json_str);
@@ -226,20 +249,9 @@ class YouTubeM3UGenerator {
             }
         }
         
-        // Pattern 5: Doğrudan m3u8 URL'leri (backslash temizlendikten sonra)
+        // Pattern 4: Doğrudan m3u8 URL'leri
         if (preg_match('/https:\/\/[^"\'\s<>]*?googlevideo\.com[^"\'\s<>]*?m3u8[^"\'\s<>]*/', $clean_html, $matches)) {
             return $matches[0];
-        }
-        
-        // Pattern 6: streamingData içinde arama
-        if (preg_match('/"streamingData":\s*({[^}]+"hlsManifestUrl"[^}]+})/', $clean_html, $matches)) {
-            $streaming_data = $matches[1];
-            if (preg_match('/"hlsManifestUrl":"(https:[^"]+?m3u8[^"]*?)"/', $streaming_data, $url_matches)) {
-                $hls_url = $url_matches[1];
-                if (strpos($hls_url, 'googlevideo.com') !== false) {
-                    return $hls_url;
-                }
-            }
         }
         
         return null;
@@ -284,9 +296,9 @@ class YouTubeM3UGenerator {
         try {
             $header = "#EXTM3U\n";
             $header .= "# Title: YouTube Live Streams\n";
-            $header .= "# Description: Gelişmiş PHP ile otomatik oluşturulmuş YouTube canlı yayın listesi\n";
+            $header .= "# Description: Google araması üzerinden otomatik oluşturulmuş YouTube canlı yayın listesi\n";
             $header .= "# Generated: " . date('Y-m-d H:i:s') . "\n";
-            $header .= "# Method: Advanced Mobile YouTube Technique\n";
+            $header .= "# Method: Google Search Referer Technique\n";
             $header .= "# Total Channels: " . count($streams) . "\n\n";
             
             $content = $header;
@@ -320,7 +332,7 @@ class YouTubeM3UGenerator {
     
     public function run() {
         echo "============================================================\n";
-        echo "🚀 YOUTUBE M3U GENERATOR (ADVANCED PHP) - BAŞLIYOR\n";
+        echo "🚀 YOUTUBE M3U GENERATOR (GOOGLE REFERER) - BAŞLIYOR\n";
         echo "============================================================\n";
         
         try {
@@ -332,7 +344,7 @@ class YouTubeM3UGenerator {
             }
             
             echo "============================================================\n";
-            echo "📡 HLS URL'LERİ ALINIYOR (ADVANCED MOBILE YOUTUBE)...\n";
+            echo "📡 HLS URL'LERİ ALINIYOR (GOOGLE ARAMA İLE)...\n";
             echo "============================================================\n";
             
             $streams = [];
@@ -371,7 +383,7 @@ class YouTubeM3UGenerator {
                 
                 // Kısa bekleme (rate limiting için)
                 if ($i < count($channels) - 1) {
-                    sleep(1);
+                    sleep(2);
                 }
             }
             
