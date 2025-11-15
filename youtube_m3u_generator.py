@@ -1,208 +1,330 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""
+YouTube M3U Generator - Professional Version
+Yeni links.txt formatına uygun olarak güncellendi
+"""
 
+import re
+import time
+import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.by import By
-import re
-import time
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
+import requests
+from urllib.parse import unquote
 import os
 
-def links_dosyasini_oku():
-    """links.txt dosyasını oku ve kanal listesini döndür"""
-    kanallar = []
-    
-    try:
-        with open('links.txt', 'r', encoding='utf-8') as dosya:
-            icerik = dosya.read()
-            print("✅ links.txt dosyası okundu")
-    except FileNotFoundError:
-        print("❌ links.txt dosyası bulunamadı!")
-        return kanallar
-    
-    satirlar = icerik.split('\n')
-    mevcut_kanal = {}
-    
-    for satir in satirlar:
-        satir = satir.strip()
-        if not satir:
-            if mevcut_kanal:
-                kanallar.append(mevcut_kanal)
-                mevcut_kanal = {}
-            continue
-        
-        if satir.startswith('isim='):
-            mevcut_kanal['isim'] = satir[5:]
-        elif satir.startswith('içerik='):
-            mevcut_kanal['icerik'] = satir[7:]
-        elif satir.startswith('logo='):
-            mevcut_kanal['logo'] = satir[5:]
-    
-    if mevcut_kanal:
-        kanallar.append(mevcut_kanal)
-    
-    print(f"📊 {len(kanallar)} kanal bulundu")
-    return kanallar
+# Logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('m3u_generator.log', encoding='utf-8')
+    ]
+)
 
-def setup_selenium():
-    """Selenium driver'ını kur"""
-    chrome_options = Options()
-    chrome_options.add_argument('--headless=new')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-    
-    # ChromeDriver'ı bul
-    chrome_driver_path = "/usr/local/bin/chromedriver"  # GitHub Actions'taki varsayılan yol
-    
-    try:
-        service = Service(chrome_driver_path)
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        return driver
-    except Exception as e:
-        print(f"❌ ChromeDriver hatası: {e}")
-        # Fallback: System PATH'ten ChromeDriver'ı dene
+class YouTubeM3UGenerator:
+    def __init__(self):
+        self.driver = None
+        self.links_file = "links.txt"
+        self.output_file = "youtube_streams.m3u"
+        self.timeout = 30
+        
+    def setup_driver(self):
+        """Chrome driver kurulumu"""
         try:
-            driver = webdriver.Chrome(options=chrome_options)
-            return driver
-        except Exception as e2:
-            print(f"❌ Fallback ChromeDriver da başarısız: {e2}")
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+            
+            # GitHub Actions için Chrome path
+            if os.path.exists('/usr/bin/chromium-browser'):
+                chrome_options.binary_location = '/usr/bin/chromium-browser'
+            
+            # ChromeDriver service ayarları
+            service = Service(
+                executable_path='/usr/bin/chromedriver' 
+                if os.path.exists('/usr/bin/chromedriver') 
+                else 'chromedriver'
+            )
+            
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
+            logging.info("✅ ChromeDriver başarıyla başlatıldı")
+            return True
+            
+        except Exception as e:
+            logging.error(f"❌ ChromeDriver başlatma hatası: {str(e)}")
+            return False
+
+    def read_channels(self):
+        """Yeni formatlı links.txt dosyasını oku ve kanal bilgilerini çıkar"""
+        channels = []
+        try:
+            with open(self.links_file, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                
+            # Her kanal bloğunu ayır (boş satırlarla ayrılmış)
+            channel_blocks = content.split('\n\n')
+            
+            for block in channel_blocks:
+                block = block.strip()
+                if not block:
+                    continue
+                    
+                channel_data = {}
+                lines = block.split('\n')
+                
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith('isim='):
+                        channel_data['name'] = line.replace('isim=', '').strip()
+                    elif line.startswith('içerik='):
+                        channel_data['url'] = line.replace('içerik=', '').strip()
+                    elif line.startswith('logo='):
+                        channel_data['logo'] = line.replace('logo=', '').strip()
+                
+                # Tüm gerekli alanlar varsa kanalı ekle
+                if 'name' in channel_data and 'url' in channel_data:
+                    # Logo yoksa boş string olarak ayarla
+                    if 'logo' not in channel_data:
+                        channel_data['logo'] = ''
+                    channels.append(channel_data)
+            
+            logging.info(f"✅ {len(channels)} kanal bulundu")
+            return channels
+            
+        except Exception as e:
+            logging.error(f"❌ links.txt okuma hatası: {str(e)}")
+            return []
+
+    def get_hls_url_selenium(self, url, channel_name):
+        """Selenium ile HLS URL'sini al"""
+        try:
+            logging.info(f"   🌐 Sayfa açılıyor: {url}")
+            
+            # Desktop YouTube URL'sine çevir (daha stabil)
+            desktop_url = url.replace('//m.youtube.com/', '//www.youtube.com/')
+            desktop_url = desktop_url.replace('//youtube.com/', '//www.youtube.com/')
+            
+            self.driver.get(desktop_url)
+            
+            # Sayfanın yüklenmesini bekle
+            WebDriverWait(self.driver, self.timeout).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            
+            # Kısa bir süre bekle (JavaScript'in çalışması için)
+            time.sleep(5)
+            
+            # Sayfa kaynağını al
+            page_source = self.driver.page_source
+            
+            # Debug için sayfa kaynağını kaydet
+            with open("debug_page.html", "w", encoding="utf-8") as f:
+                f.write(page_source)
+            logging.info("   📄 Sayfa kaynağı debug_page.html'ye kaydedildi")
+            
+            # HLS URL'sini bulmak için farklı pattern'ler dene
+            hls_url = self.extract_hls_from_page_source(page_source)
+            
+            if hls_url:
+                logging.info(f"   ✅ HLS URL bulundu: {hls_url[:100]}...")
+                return hls_url
+            else:
+                # Alternatif yöntem: Network requests'i dinle
+                hls_url = self.extract_hls_from_network_requests()
+                if hls_url:
+                    logging.info(f"   ✅ HLS URL (network) bulundu: {hls_url[:100]}...")
+                    return hls_url
+            
+            logging.warning("   ❌ HLS URL bulunamadı")
+            return None
+            
+        except TimeoutException:
+            logging.error("   ⏰ Sayfa yükleme zaman aşımına uğradı")
+            return None
+        except Exception as e:
+            logging.error(f"   ❌ HLS URL alma hatası: {str(e)}")
             return None
 
-def get_hls_url_selenium(driver, youtube_url):
-    """Selenium ile HLS URL'sini al"""
-    try:
-        print(f"   🌐 Sayfa açılıyor: {youtube_url}")
-        driver.get(youtube_url)
-        
-        # Sayfanın tamamen yüklenmesini bekle (daha uzun süre)
-        time.sleep(10)
-        
-        # Sayfa kaynağını al
-        page_source = driver.page_source
-        
-        # Debug: Sayfa kaynağını kaydet (sadece ilk 5000 karakter)
-        with open('debug_page.html', 'w', encoding='utf-8') as f:
-            f.write(page_source[:5000])
-        print("   📄 Sayfa kaynağı debug_page.html'ye kaydedildi")
-        
-        # Gelişmiş HLS URL arama pattern'leri
+    def extract_hls_from_page_source(self, page_source):
+        """Sayfa kaynağından HLS URL'sini çıkar"""
+        # Farklı HLS URL pattern'leri
         patterns = [
-            r'"hlsManifestUrl":"(https:[^"]+m3u8[^"]*)"',
-            r'"hlsManifestUrl":"(https:[^"]+)"',
-            r'hlsManifestUrl["\']?\s*:\s*["\'](https:[^"\']+m3u8[^"\']*)["\']',
-            r'"url":"(https:[^"]+m3u8[^"]*)"',
-            r'\\"hlsManifestUrl\\":\\"(https:[^"]+m3u8[^"]*)\\"',
-            r'hlsManifestUrl["\']?\s*:\s*["\'](https:[^"\']+)["\']',
-            r'"liveUrl":"(https:[^"]+m3u8[^"]*)"',
-            r'"playbackUrl":"(https:[^"]+m3u8[^"]*)"',
+            r'"hlsManifestUrl":"([^"]+)"',
+            r'"url":"([^"]*m3u8[^"]*)"',
+            r'https://[^"]*\.m3u8[^"]*',
+            r'hlsManifestUrl[^=]*=[^"']*["\']([^"\']+)[\'"]',
         ]
         
         for pattern in patterns:
-            matches = re.findall(pattern, page_source)
-            if matches:
-                for match in matches:
-                    # URL'yi temizle
-                    hls_url = match.replace('\\u0026', '&').replace('\\/', '/').replace('\\\\u0026', '&')
-                    if 'm3u8' in hls_url:
-                        print(f"   ✅ HLS URL bulundu: {hls_url[:100]}...")
-                        return hls_url
+            matches = re.findall(pattern, page_source, re.IGNORECASE)
+            for match in matches:
+                hls_url = match.replace('\\u0026', '&')
+                if '.m3u8' in hls_url and 'googlevideo.com' in hls_url:
+                    return hls_url
         
-        print("   ❌ HLS URL bulunamadı")
-        return None
-        
-    except Exception as e:
-        print(f"   ❌ Selenium hatası: {str(e)}")
         return None
 
-def m3u_dosyasi_olustur(kanallar):
-    """M3U dosyasını oluştur"""
-    m3u_icerik = "#EXTM3U\n"
-    basarili_kanallar = 0
-    
-    for kanal in kanallar:
-        if 'hls_url' in kanal and kanal['hls_url']:
-            m3u_icerik += f'#EXTINF:-1 tvg-id="{kanal["isim"]}" tvg-name="{kanal["isim"]}" tvg-logo="{kanal["logo"]}" group-title="YouTube",{kanal["isim"]}\n'
-            m3u_icerik += f'{kanal["hls_url"]}\n'
-            basarili_kanallar += 1
-    
-    try:
-        with open('youtube.m3u', 'w', encoding='utf-8') as dosya:
-            dosya.write(m3u_icerik)
-        print(f"✅ youtube.m3u dosyası oluşturuldu ({basarili_kanallar} kanal)")
-        return basarili_kanallar
-    except Exception as e:
-        print(f"❌ M3U dosyası yazılamadı: {e}")
-        return 0
+    def extract_hls_from_network_requests(self):
+        """Network loglarından HLS URL'sini bul"""
+        try:
+            performance_logs = self.driver.get_log('performance')
+            for entry in performance_logs:
+                try:
+                    message = eval(entry['message'])
+                    message_type = message.get('message', {}).get('method', '')
+                    
+                    if message_type == 'Network.responseReceived':
+                        response = message['message']['params']['response']
+                        url = response.get('url', '')
+                        
+                        if '.m3u8' in url and 'googlevideo.com' in url:
+                            return url
+                            
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        
+        return None
+
+    def create_m3u_header(self):
+        """M3U dosyası header'ını oluştur"""
+        return f"""#EXTM3U
+# Title: YouTube Live Streams
+# Description: Otomatik olarak oluşturulmuş YouTube canlı yayın listesi
+# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
+# Total Channels: {len(self.channels)}
+
+"""
+
+    def write_m3u_file(self, streams):
+        """M3U dosyasını yaz - logo bilgilerini de ekle"""
+        try:
+            with open(self.output_file, 'w', encoding='utf-8') as f:
+                f.write(self.create_m3u_header())
+                
+                for stream in streams:
+                    if stream['hls_url']:
+                        # Logo varsa tvg-logo parametresini ekle
+                        if stream.get('logo'):
+                            f.write(f"#EXTINF:-1 tvg-id=\"{stream['name']}\" tvg-name=\"{stream['name']}\" tvg-logo=\"{stream['logo']}\" group-title=\"YouTube\",{stream['name']}\n")
+                        else:
+                            f.write(f"#EXTINF:-1 tvg-id=\"{stream['name']}\" tvg-name=\"{stream['name']}\" group-title=\"YouTube\",{stream['name']}\n")
+                        f.write(f"{stream['hls_url']}\n\n")
+            
+            logging.info(f"✅ M3U dosyası oluşturuldu: {self.output_file}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"❌ M3U dosyası yazma hatası: {str(e)}")
+            return False
+
+    def cleanup(self):
+        """Driver'ı temizle"""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+
+    def run(self):
+        """Ana çalıştırma fonksiyonu"""
+        print("=" * 60)
+        print("🚀 YOUTUBE M3U GENERATOR (PROFESSIONAL EDITION) - BAŞLIYOR")
+        print("=" * 60)
+        
+        try:
+            # Kanal listesini oku
+            self.channels = self.read_channels()
+            if not self.channels:
+                logging.error("❌ Hiç kanal bulunamadı!")
+                return False
+
+            # Driver'ı başlat
+            if not self.setup_driver():
+                return False
+
+            print("=" * 60)
+            print("📡 HLS URL'LERİ ALINIYOR (SELENIUM)...")
+            print("=" * 60)
+
+            streams = []
+            success_count = 0
+
+            for channel in self.channels:
+                print(f"\n🎬 KANAL: {channel['name']}")
+                print(f"   🔗 URL: {channel['url']}")
+                if channel.get('logo'):
+                    print(f"   🖼️ LOGO: {channel['logo'][:50]}...")
+                
+                hls_url = self.get_hls_url_selenium(channel['url'], channel['name'])
+                
+                if hls_url:
+                    streams.append({
+                        'name': channel['name'],
+                        'url': channel['url'],
+                        'logo': channel.get('logo', ''),
+                        'hls_url': hls_url
+                    })
+                    success_count += 1
+                    print(f"   ✅ BAŞARILI - HLS URL alındı")
+                else:
+                    streams.append({
+                        'name': channel['name'],
+                        'url': channel['url'],
+                        'logo': channel.get('logo', ''),
+                        'hls_url': None
+                    })
+                    print(f"   ❌ BAŞARISIZ - HLS URL alınamadı")
+
+            # M3U dosyasını oluştur
+            if streams:
+                self.write_m3u_file(streams)
+                
+                # İstatistikleri göster
+                print("\n" + "=" * 60)
+                print("📊 İSTATİSTİKLER")
+                print("=" * 60)
+                print(f"📺 Toplam Kanal: {len(self.channels)}")
+                print(f"✅ Başarılı: {success_count}")
+                print(f"❌ Başarısız: {len(self.channels) - success_count}")
+                print(f"📈 Başarı Oranı: {(success_count/len(self.channels))*100:.1f}%")
+                print(f"💾 Çıktı Dosyası: {self.output_file}")
+                
+            return success_count > 0
+
+        except Exception as e:
+            logging.error(f"❌ Beklenmeyen hata: {str(e)}")
+            return False
+        finally:
+            self.cleanup()
 
 def main():
-    print("=" * 60)
-    print("🚀 YOUTUBE M3U GENERATOR (SELENIUM FIXED) - BAŞLIYOR")
-    print("=" * 60)
+    """Ana fonksiyon"""
+    generator = YouTubeM3UGenerator()
+    success = generator.run()
     
-    # 1. links.txt dosyasını oku
-    kanallar = links_dosyasini_oku()
-    if not kanallar:
-        print("❌ İşlem iptal edildi: Kanallar bulunamadı")
-        return
-    
-    # 2. Selenium driver'ını başlat
-    print("🖥️ Selenium driver başlatılıyor...")
-    driver = setup_selenium()
-    
-    if not driver:
-        print("❌ Selenium driver başlatılamadı!")
-        return
-    
-    try:
-        # 3. Her kanal için HLS URL'sini al
-        print("\n" + "=" * 60)
-        print("📡 HLS URL'LERİ ALINIYOR (SELENIUM)...")
-        print("=" * 60)
-        
-        for kanal in kanallar:
-            print(f"\n🎬 KANAL: {kanal['isim']}")
-            print(f"   🔗 URL: {kanal['icerik']}")
-            
-            hls_url = get_hls_url_selenium(driver, kanal['icerik'])
-            
-            if hls_url:
-                kanal['hls_url'] = hls_url
-                print(f"   ✅ BAŞARILI - HLS URL alındı")
-            else:
-                print(f"   ❌ BAŞARISIZ - HLS URL alınamadı")
-            
-            # Bekleme
-            time.sleep(5)
-        
-        # 4. M3U dosyasını oluştur
-        print("\n" + "=" * 60)
-        print("📝 M3U DOSYASI OLUŞTURULUYOR...")
-        print("=" * 60)
-        
-        basarili_sayisi = m3u_dosyasi_olustur(kanallar)
-        
-        # 5. Sonuçları göster
-        print("\n" + "=" * 60)
-        print("🎉 SONUÇLAR")
-        print("=" * 60)
-        print(f"📊 Toplam Kanal: {len(kanallar)}")
-        print(f"✅ Başarılı: {basarili_sayisi}")
-        print(f"❌ Başarısız: {len(kanallar) - basarili_sayisi}")
-
-    finally:
-        # Driver'ı kapat
-        if driver:
-            driver.quit()
-            print("🖥️ Selenium driver kapatıldı")
+    if success:
+        print("\n🎉 M3U dosyası başarıyla oluşturuldu!")
+    else:
+        print("\n💥 M3U dosyası oluşturulamadı!")
+        exit(1)
 
 if __name__ == "__main__":
     main()
