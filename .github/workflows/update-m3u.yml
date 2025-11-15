@@ -15,24 +15,15 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Setup Python
-      uses: actions/setup-python@v4
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
       with:
-        python-version: '3.10'
+        php-version: '8.1'
+        extensions: curl, mbstring, json
 
-    - name: Install System Dependencies
+    - name: Run YouTube M3U Generator (PHP)
       run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser chromium-chromedriver xvfb wget
-
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install selenium requests beautifulsoup4 urllib3 webdriver-manager
-
-    - name: Run YouTube M3U Generator
-      run: |
-        xvfb-run --auto-servernum python youtube_m3u_generator.py
+        php youtube_m3u_generator.php
 
     - name: Commit and push if changed
       run: |
