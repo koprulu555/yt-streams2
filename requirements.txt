@@ -1,5 +1,1 @@
-selenium==4.15.0
-requests==2.31.0
-beautifulsoup4==4.12.2
-urllib3==2.1.0
-webdriver-manager==4.0.1
+# PHP script için gerekli değil, sadece format için
