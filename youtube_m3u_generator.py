@@ -7,6 +7,7 @@ Yeni links.txt formatına uygun olarak güncellendi
 import re
 import time
 import logging
+import json
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -127,8 +128,8 @@ class YouTubeM3UGenerator:
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
             
-            # Kısa bir süre bekle (JavaScript'in çalışması için)
-            time.sleep(5)
+            # Daha uzun süre bekle (JavaScript ve video player'ın yüklenmesi için)
+            time.sleep(8)
             
             # Sayfa kaynağını al
             page_source = self.driver.page_source
@@ -145,7 +146,13 @@ class YouTubeM3UGenerator:
                 logging.info(f"   ✅ HLS URL bulundu: {hls_url[:100]}...")
                 return hls_url
             else:
-                # Alternatif yöntem: Network requests'i dinle
+                # Alternatif yöntem: JavaScript execution
+                hls_url = self.extract_hls_via_javascript()
+                if hls_url:
+                    logging.info(f"   ✅ HLS URL (JavaScript) bulundu: {hls_url[:100]}...")
+                    return hls_url
+                
+                # Network requests'i dinle
                 hls_url = self.extract_hls_from_network_requests()
                 if hls_url:
                     logging.info(f"   ✅ HLS URL (network) bulundu: {hls_url[:100]}...")
@@ -163,20 +170,83 @@ class YouTubeM3UGenerator:
 
     def extract_hls_from_page_source(self, page_source):
         """Sayfa kaynağından HLS URL'sini çıkar"""
-        # Farklı HLS URL pattern'leri
-        patterns = [
-            r'"hlsManifestUrl":"([^"]+)"',
-            r'"url":"([^"]*m3u8[^"]*)"',
-            r'https://[^"]*\.m3u8[^"]*',
-            r'hlsManifestUrl[^=]*=[^"']*["\']([^"\']+)[\'"]',
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, page_source, re.IGNORECASE)
+        try:
+            # Pattern 1: Doğrudan hlsManifestUrl
+            pattern1 = r'"hlsManifestUrl":"(https:[^"]+)"'
+            matches = re.findall(pattern1, page_source)
             for match in matches:
-                hls_url = match.replace('\\u0026', '&')
+                hls_url = match.replace('\\u0026', '&').replace('\\/', '/')
                 if '.m3u8' in hls_url and 'googlevideo.com' in hls_url:
                     return hls_url
+            
+            # Pattern 2: URL içinde m3u8 geçen
+            pattern2 = r'"url":"(https:[^"]*m3u8[^"]*)"'
+            matches = re.findall(pattern2, page_source)
+            for match in matches:
+                hls_url = match.replace('\\u0026', '&').replace('\\/', '/')
+                if 'googlevideo.com' in hls_url:
+                    return hls_url
+            
+            # Pattern 3: Adaptive formats içinde arama
+            pattern3 = r'"adaptiveFormats":\s*(\[.*?\])'
+            matches = re.findall(pattern3, page_source, re.DOTALL)
+            for match in matches:
+                try:
+                    formats = json.loads(match)
+                    for fmt in formats:
+                        url = fmt.get('url', '')
+                        if '.m3u8' in url and 'googlevideo.com' in url:
+                            return url
+                except:
+                    continue
+            
+            # Pattern 4: streamingData içinde arama
+            pattern4 = r'"streamingData":\s*({.*?})'
+            matches = re.findall(pattern4, page_source, re.DOTALL)
+            for match in matches:
+                try:
+                    streaming_data = json.loads(match)
+                    hls_url = streaming_data.get('hlsManifestUrl', '')
+                    if hls_url and '.m3u8' in hls_url:
+                        return hls_url.replace('\\u0026', '&')
+                except:
+                    continue
+            
+            return None
+            
+        except Exception as e:
+            logging.error(f"   ❌ HLS extraction hatası: {str(e)}")
+            return None
+
+    def extract_hls_via_javascript(self):
+        """JavaScript execution ile HLS URL'sini bul"""
+        try:
+            # Video element'ini kontrol et
+            js_script = """
+            var video = document.querySelector('video');
+            if (video && video.src) {
+                return video.src;
+            }
+            
+            // YouTube player data
+            var ytPlayer = document.getElementById('movie_player');
+            if (ytPlayer && ytPlayer.getVideoData) {
+                var videoData = ytPlayer.getVideoData();
+                if (videoData && videoData.dashmpd) {
+                    return videoData.dashmpd;
+                }
+            }
+            
+            // Network requests'te m3u8 ara
+            return null;
+            """
+            
+            result = self.driver.execute_script(js_script)
+            if result and '.m3u8' in result:
+                return result
+                
+        except Exception:
+            pass
         
         return None
 
@@ -186,7 +256,7 @@ class YouTubeM3UGenerator:
             performance_logs = self.driver.get_log('performance')
             for entry in performance_logs:
                 try:
-                    message = eval(entry['message'])
+                    message = json.loads(entry['message'])
                     message_type = message.get('message', {}).get('method', '')
                     
                     if message_type == 'Network.responseReceived':
