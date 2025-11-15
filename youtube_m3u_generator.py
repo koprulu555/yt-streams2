@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-YouTube M3U Generator - Ultimate Anti-Bot Bypass
+YouTube M3U Generator - Ultimate Anti-Bot Bypass (Fixed)
 No API, No Proxy, Pure Selenium Solution
 """
 
@@ -9,7 +9,6 @@ import time
 import random
 import logging
 import json
-import base64
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -18,7 +17,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.keys import Keys
 import requests
 from urllib.parse import unquote, urlparse
 import os
@@ -231,42 +229,6 @@ class YouTubeM3UGenerator:
             logging.warning("   ⚠️ Video element zaman aşımı, devam ediliyor...")
             return False
 
-    def extract_hls_from_network_traffic(self):
-        """Network trafiğinden HLS URL'lerini yakala"""
-        try:
-            # Performance loglarını al
-            logs = self.driver.get_log('performance')
-            
-            hls_urls = []
-            for entry in logs:
-                try:
-                    message = json.loads(entry['message'])
-                    message_type = message.get('message', {}).get('method', '')
-                    
-                    if message_type in ['Network.responseReceived', 'Network.requestWillBeSent']:
-                        request_data = message['message']['params']
-                        url = request_data.get('request', {}).get('url', '') or \
-                              request_data.get('response', {}).get('url', '')
-                        
-                        if url and '.m3u8' in url and 'googlevideo.com' in url:
-                            # URL'yi temizle
-                            clean_url = re.sub(r'\\[xu][0-9a-fA-F]{2,4}', '', url)
-                            hls_urls.append(clean_url)
-                            
-                except Exception:
-                    continue
-            
-            # En kaliteli URL'yi seç (genellikle en uzun olan)
-            if hls_urls:
-                best_url = max(hls_urls, key=len)
-                return best_url
-                    
-            return None
-            
-        except Exception as e:
-            logging.error(f"   ❌ Network trafik analiz hatası: {str(e)}")
-            return None
-
     def extract_hls_from_page_content(self):
         """Sayfa içeriğinden HLS URL'sini çıkar"""
         try:
@@ -375,6 +337,13 @@ class YouTubeM3UGenerator:
                     }
                 }
                 return null;
+                """,
+                """
+                // ytInitialPlayerResponse değişkenini doğrudan oku
+                if (window.ytInitialPlayerResponse) {
+                    return JSON.stringify(window.ytInitialPlayerResponse);
+                }
+                return null;
                 """
             ]
             
@@ -384,6 +353,17 @@ class YouTubeM3UGenerator:
                     if result and '.m3u8' in result:
                         logging.info(f"   ✅ JavaScript ile HLS bulundu: {result[:80]}...")
                         return result
+                    elif result and 'hlsManifestUrl' in result:
+                        # Eğer JSON string'i döndüyse, parse et
+                        try:
+                            data = json.loads(result)
+                            streaming_data = data.get('streamingData', {})
+                            hls_url = streaming_data.get('hlsManifestUrl', '')
+                            if hls_url and '.m3u8' in hls_url:
+                                logging.info(f"   ✅ JavaScript JSON'dan HLS bulundu: {hls_url[:80]}...")
+                                return hls_url
+                        except:
+                            pass
                 except Exception:
                     continue
             
@@ -419,17 +399,12 @@ class YouTubeM3UGenerator:
             # Ekstra bekleme süresi
             time.sleep(8)
             
-            # 1. Yöntem: Network trafiğinden HLS ara
-            hls_url = self.extract_hls_from_network_traffic()
-            if hls_url:
-                return hls_url
-            
-            # 2. Yöntem: Sayfa içeriğinden HLS ara
+            # 1. Yöntem: Sayfa içeriğinden HLS ara
             hls_url = self.extract_hls_from_page_content()
             if hls_url:
                 return hls_url
             
-            # 3. Yöntem: Alternatif JavaScript metodları
+            # 2. Yöntem: Alternatif JavaScript metodları
             hls_url = self.try_alternative_methods(url)
             if hls_url:
                 return hls_url
@@ -439,9 +414,7 @@ class YouTubeM3UGenerator:
             self.driver.refresh()
             time.sleep(10)
             
-            hls_url = self.extract_hls_from_network_traffic() or \
-                     self.extract_hls_from_page_content() or \
-                     self.try_alternative_methods(url)
+            hls_url = self.extract_hls_from_page_content() or self.try_alternative_methods(url)
             
             if hls_url:
                 return hls_url
