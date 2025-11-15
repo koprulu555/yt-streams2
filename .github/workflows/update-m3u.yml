@@ -21,7 +21,7 @@ jobs:
         php-version: '8.1'
         extensions: curl, mbstring, json
 
-    - name: Run YouTube M3U Generator (PHP)
+    - name: Run YouTube M3U Generator (Advanced PHP)
       run: |
         php youtube_m3u_generator.php
 
