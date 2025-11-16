@@ -1,1 +1,1 @@
-# PHP script için gerekli değil, sadece format için
+requests==2.31.0
