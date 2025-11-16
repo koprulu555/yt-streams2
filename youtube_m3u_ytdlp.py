@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """
-YouTube M3U Generator - Professional yt-dlp Edition
-Advanced HLS URL extraction using yt-dlp
+YouTube M3U Generator - Professional yt-dlp Edition (FIXED)
 """
 
 import os
-import sys
 import time
 import logging
 import json
 import subprocess
 import re
-from urllib.parse import unquote
-import requests
 
 # Logging configuration
 logging.basicConfig(
@@ -43,7 +39,7 @@ class YouTubeDLPM3UGenerator:
                 logging.info(f"✅ yt-dlp bulundu: {result.stdout.strip()}")
                 return True
             else:
-                logging.error("❌ yt-dlp bulunamadı veya çalıştırılamıyor")
+                logging.error("❌ yt-dlp bulunamadı")
                 return False
                 
         except Exception as e:
@@ -51,7 +47,7 @@ class YouTubeDLPM3UGenerator:
             return False
 
     def read_channels(self):
-        """links.txt dosyasını oku ve kanal bilgilerini çıkar"""
+        """links.txt dosyasını oku"""
         channels = []
         try:
             with open(self.links_file, 'r', encoding='utf-8') as f:
@@ -88,34 +84,12 @@ class YouTubeDLPM3UGenerator:
             logging.error(f"❌ links.txt okuma hatası: {str(e)}")
             return []
 
-    def extract_video_id(self, url):
-        """URL'den video ID'sini çıkar"""
-        try:
-            patterns = [
-                r'(?:v=|/v/|youtu\.be/|/embed/)([^&?/]+)',
-                r'youtube\.com/watch\?v=([^&?/]+)',
-                r'youtube\.com/embed/([^&?/]+)',
-                r'youtu\.be/([^&?/]+)'
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, url)
-                if match:
-                    video_id = match.group(1)
-                    video_id = video_id.split('&')[0].split('?')[0]
-                    return video_id
-            return None
-            
-        except Exception as e:
-            logging.error(f"❌ Video ID çıkarma hatası: {e}")
-            return None
-
     def get_hls_url_ytdlp(self, url, channel_name):
-        """yt-dlp ile HLS URL'sini al - profesyonel yöntem"""
+        """yt-dlp ile HLS URL'sini al - DÜZELTİLMİŞ"""
         try:
-            logging.info(f"   🌐 yt-dlp ile analiz: {url}")
+            logging.info(f"   🌐 yt-dlp ile analiz: {channel_name}")
             
-            # yt-dlp komutunu oluştur
+            # DÜZELTME: Eskimiş seçenek kaldırıldı, basitleştirildi
             cmd = [
                 self.yt_dlp_path,
                 '--dump-json',
@@ -123,10 +97,7 @@ class YouTubeDLPM3UGenerator:
                 '--ignore-errors',
                 '--geo-bypass',
                 '--format', 'best',
-                '--youtube-skip-dash-manifest',
                 '--no-check-certificate',
-                '--socket-timeout', '30',
-                '--source-address', '0.0.0.0',
                 url
             ]
             
@@ -135,128 +106,71 @@ class YouTubeDLPM3UGenerator:
                 cmd, 
                 capture_output=True, 
                 text=True, 
-                timeout=self.timeout,
-                check=False
+                timeout=self.timeout
             )
             
-            if result.returncode != 0:
-                logging.warning(f"   ⚠️ yt-dlp hata kodu: {result.returncode}")
-                if result.stderr:
-                    logging.warning(f"   ⚠️ yt-dlp stderr: {result.stderr[:200]}")
-            
-            # JSON çıktısını parse et
+            # DÜZELTME: Hata durumunda bile çıktıyı kontrol et
             if result.stdout:
                 try:
                     video_info = json.loads(result.stdout)
-                    return self.extract_hls_from_ytdlp_info(video_info, url)
-                except json.JSONDecodeError as e:
-                    logging.error(f"   ❌ JSON parse hatası: {e}")
+                    hls_url = self.extract_hls_from_ytdlp_info(video_info)
+                    if hls_url:
+                        logging.info(f"   ✅ HLS URL bulundu: {hls_url[:80]}...")
+                        return hls_url
+                    else:
+                        logging.warning("   ⚠️ HLS URL bulunamadı")
+                        return None
+                except json.JSONDecodeError:
+                    logging.error("   ❌ Geçersiz JSON yanıtı")
                     return None
             else:
                 logging.error("   ❌ yt-dlp çıktı vermedi")
                 return None
                 
         except subprocess.TimeoutExpired:
-            logging.error("   ⏰ yt-dlp zaman aşımına uğradı")
+            logging.error("   ⏰ yt-dlp zaman aşımı")
             return None
         except Exception as e:
-            logging.error(f"   ❌ yt-dlp işleme hatası: {str(e)}")
+            logging.error(f"   ❌ yt-dlp hatası: {str(e)}")
             return None
 
-    def extract_hls_from_ytdlp_info(self, video_info, original_url):
+    def extract_hls_from_ytdlp_info(self, video_info):
         """yt-dlp bilgilerinden HLS URL'sini çıkar"""
         try:
-            hls_urls = []
-            
-            # 1. Doğrudan HLS URL'si
-            if video_info.get('url') and '.m3u8' in video_info.get('url', ''):
-                hls_urls.append(video_info['url'])
+            # 1. Doğrudan URL
+            if video_info.get('url') and '.m3u8' in video_info['url']:
+                return video_info['url']
             
             # 2. Formatlar içinde HLS arama
             if 'formats' in video_info:
                 for fmt in video_info['formats']:
                     # HLS formatlarını kontrol et
-                    if any(keyword in fmt.get('format_note', '').lower() for keyword in ['hls', 'm3u8']):
-                        if fmt.get('url') and '.m3u8' in fmt['url']:
-                            hls_urls.append(fmt['url'])
-                    
-                    # Protocol HLS ise
                     if fmt.get('protocol') in ['m3u8', 'm3u8_native']:
-                        if fmt.get('url'):
-                            hls_urls.append(fmt['url'])
+                        if fmt.get('url') and '.m3u8' in fmt['url']:
+                            return fmt['url']
+                    
+                    # URL'de m3u8 geçenleri kontrol et
+                    if fmt.get('url') and '.m3u8' in fmt['url']:
+                        return fmt['url']
             
             # 3. requested_formats içinde arama
             if 'requested_formats' in video_info:
                 for fmt in video_info['requested_formats']:
                     if fmt.get('url') and '.m3u8' in fmt['url']:
-                        hls_urls.append(fmt['url'])
+                        return fmt['url']
             
-            # 4. En iyi HLS URL'sini seç
-            if hls_urls:
-                # En uzun URL'yi seç (genellikle daha fazla parametre = daha kaliteli)
-                best_url = max(hls_urls, key=len)
-                logging.info(f"   ✅ yt-dlp ile HLS URL bulundu: {best_url[:80]}...")
-                return best_url
-            
-            # 5. Eğer HLS bulunamazsa, normal URL'yi dene
-            if video_info.get('url'):
-                logging.info(f"   ℹ️  HLS bulunamadı, normal URL kullanılıyor: {video_info['url'][:80]}...")
-                return video_info['url']
-            
-            logging.warning("   ❌ yt-dlp HLS URL bulamadı")
             return None
             
         except Exception as e:
-            logging.error(f"   ❌ HLS extraction hatası: {str(e)}")
+            logging.error(f"   ❌ HLS çıkarma hatası: {str(e)}")
             return None
-
-    def get_stream_info_ytdlp(self, url, channel_name):
-        """yt-dlp ile gelişmiş stream bilgisi al"""
-        try:
-            logging.info(f"   🔍 Gelişmiş analiz: {channel_name}")
-            
-            cmd = [
-                self.yt_dlp_path,
-                '--list-formats',
-                '--no-warnings',
-                '--ignore-errors',
-                url
-            ]
-            
-            result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=30
-            )
-            
-            if result.returncode == 0:
-                lines = result.stdout.split('\n')
-                hls_lines = [line for line in lines if 'm3u8' in line.lower()]
-                
-                if hls_lines:
-                    logging.info(f"   📊 Mevcut HLS formatları: {len(hls_lines)}")
-                    for line in hls_lines[:3]:  # İlk 3 formatı göster
-                        logging.info(f"      📝 {line.strip()}")
-                    return True
-                else:
-                    logging.warning("   ⚠️ HLS formatı bulunamadı")
-                    return False
-            else:
-                logging.error(f"   ❌ Format listeleme hatası: {result.stderr}")
-                return False
-                
-        except Exception as e:
-            logging.error(f"   ❌ Stream info hatası: {str(e)}")
-            return False
 
     def create_m3u_header(self):
         """M3U dosyası header'ını oluştur"""
         return f"""#EXTM3U
-# Title: YouTube Live Streams (yt-dlp Professional)
-# Description: yt-dlp ile profesyonel olarak oluşturulmuş YouTube canlı yayın listesi
+# Title: YouTube Live Streams
+# Description: yt-dlp ile oluşturulmuş YouTube canlı yayın listesi
 # Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
-# Method: yt-dlp Advanced Extraction
 # Total Channels: {len(self.channels)}
 
 """
@@ -286,23 +200,21 @@ class YouTubeDLPM3UGenerator:
     def run(self):
         """Ana çalıştırma fonksiyonu"""
         print("=" * 60)
-        print("🚀 YOUTUBE M3U GENERATOR (PRO YT-DLP EDITION) - BAŞLIYOR")
+        print("🚀 YOUTUBE M3U GENERATOR (YT-DLP FIXED) - BAŞLIYOR")
         print("=" * 60)
         
         try:
             # yt-dlp kontrolü
             if not self.check_yt_dlp_installation():
-                logging.error("❌ yt-dlp kurulu değil! Lütfen önce yt-dlp'yi kurun.")
                 return False
 
             # Kanal listesini oku
             self.channels = self.read_channels()
             if not self.channels:
-                logging.error("❌ Hiç kanal bulunamadı!")
                 return False
 
             print("=" * 60)
-            print("📡 HLS URL'LERİ ALINIYOR (YT-DLP PROFESSIONAL)...")
+            print("📡 HLS URL'LERİ ALINIYOR...")
             print("=" * 60)
 
             streams = []
@@ -311,13 +223,8 @@ class YouTubeDLPM3UGenerator:
             for i, channel in enumerate(self.channels, 1):
                 print(f"\n🎬 KANAL {i}/{len(self.channels)}: {channel['name']}")
                 print(f"   🔗 URL: {channel['url']}")
-                if channel.get('logo'):
-                    print(f"   🖼️ LOGO: {channel['logo'][:50]}...")
                 
-                # Önce stream bilgilerini al
-                has_streams = self.get_stream_info_ytdlp(channel['url'], channel['name'])
-                
-                # HLS URL'sini al
+                # DÜZELTME: Sadece HLS URL alma fonksiyonunu kullan
                 hls_url = self.get_hls_url_ytdlp(channel['url'], channel['name'])
                 
                 if hls_url:
@@ -338,7 +245,7 @@ class YouTubeDLPM3UGenerator:
                     })
                     print(f"   ❌ BAŞARISIZ - HLS URL alınamadı")
                 
-                # Rate limiting
+                # Kısa bekleme
                 if i < len(self.channels):
                     time.sleep(2)
 
@@ -354,8 +261,6 @@ class YouTubeDLPM3UGenerator:
                 print(f"✅ Başarılı: {success_count}")
                 print(f"❌ Başarısız: {len(self.channels) - success_count}")
                 print(f"📈 Başarı Oranı: {(success_count/len(self.channels))*100:.1f}%")
-                print(f"💾 Çıktı Dosyası: {self.output_file}")
-                print(f"🔧 Kullanılan Araç: yt-dlp (Professional Edition)")
                 
             return success_count > 0
 
@@ -369,8 +274,7 @@ def main():
     success = generator.run()
     
     if success:
-        print("\n🎉 PROFESYONEL M3U dosyası başarıyla oluşturuldu!")
-        print("   🚀 yt-dlp ile maksimum başarı oranı!")
+        print("\n🎉 M3U dosyası başarıyla oluşturuldu!")
     else:
         print("\n💥 M3U dosyası oluşturulamadı!")
         exit(1)
